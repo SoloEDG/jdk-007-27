@@ -1,5 +1,6 @@
 import type { Track, Instrument, Note, Session } from "@/shared/types";
 import { uid } from "@/shared/math";
+import { DEFAULT_TIMBRE, type Timbre } from "@/shared/timbre";
 import { validateSession } from "../lib/validation";
 export function createArrangement() {
   let tracks: Track[] = [],
@@ -36,6 +37,7 @@ export function createArrangement() {
         instrument,
         color: colors[tracks.length % colors.length],
         notes: [],
+        timbre: instrument === "keys" ? structuredClone(DEFAULT_TIMBRE) : null,
       };
       tracks = [...tracks, t];
       selected = t.id;
@@ -50,6 +52,20 @@ export function createArrangement() {
       tracks = tracks.map((t) =>
         t.id === id ? { ...t, notes: structuredClone(notes) } : t,
       );
+    },
+    /** 确认后的音色写入轨道；录音只存音符，音色始终随轨道保存。 */
+    updateTimbre(id: string, timbre: Timbre) {
+      if (!tracks.some((t) => t.id === id))
+        throw new Error("音色目标轨道已不存在");
+      tracks = tracks.map((t) =>
+        t.id === id && t.instrument === "keys"
+          ? { ...t, timbre: structuredClone(timbre) }
+          : t,
+      );
+    },
+    timbre(id: string): Timbre | null {
+      const t = tracks.find((track) => track.id === id);
+      return t?.timbre ? structuredClone(t.timbre) : null;
     },
     resizeLoop(beats: number) {
       tracks = tracks.map((track) => ({

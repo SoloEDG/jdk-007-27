@@ -1,9 +1,10 @@
 import { useStudio } from "./useStudio";
 import { TransportBar, BeatLights } from "@/features/transport";
-import { Pads, Keyboard } from "@/features/instruments";
+import { Pads, Keyboard, TimbrePanel } from "@/features/instruments";
 import { Timeline, TrackActions } from "@/features/arrangement";
 import { RecordControls, RecordingStatus } from "@/features/recorder";
 import { MixerPanel } from "@/features/mixer";
+import { WAVE_LABELS } from "@/shared/timbre";
 export function App() {
   const s = useStudio();
   if (!s) return <div className="loading">正在打开夜航工作室…</div>;
@@ -130,11 +131,24 @@ export function App() {
             <div className="instrument-label">
               <span>
                 {v.selected?.instrument === "keys"
-                  ? "柔和三角波 / WARM TRIANGLE"
+                  ? v.selected.timbre
+                    ? WAVE_LABELS[v.selected.timbre.waveform]
+                    : "POLY SYNTH"
                   : "经典合成鼓组 / ANALOG KIT"}
               </span>
               <span>鼠标 · 触控 · 键盘</span>
             </div>
+            {v.selected?.instrument === "keys" && v.selected.timbre && (
+              <TimbrePanel
+                confirmed={v.selected.timbre}
+                draft={v.timbreDraft}
+                previewing={v.previewing}
+                onChange={s.editTimbre}
+                onPreview={() => void s.previewTimbre()}
+                onCommit={s.commitTimbre}
+                onCancel={s.cancelTimbre}
+              />
+            )}
             {v.selected?.instrument === "keys" ? (
               <Keyboard active={v.active} down={s.down} up={s.up} />
             ) : (

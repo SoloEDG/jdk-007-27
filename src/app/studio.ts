@@ -9,6 +9,11 @@ import {
 } from "@/features/arrangement";
 import { createMixer } from "@/features/mixer";
 import type { NoteInput, Instrument, Session } from "@/shared/types";
+import {
+  clampTimbre,
+  timbreEqual,
+  type Timbre,
+} from "@/shared/timbre";
 export function createStudio(notify: () => void) {
   const engine = createEngine(),
     transport = createTransport(),
@@ -19,6 +24,9 @@ export function createStudio(notify: () => void) {
   let message = "欢迎来到夜航。戴上耳机，试着敲下第一拍。",
     epoch = 0,
     disposed = false;
+  // 音色编辑草稿：只存在于内存，确认前不进入轨道、不进入引擎注册表
+  let timbreDraft: Timbre | null = null;
+  let previewTrackId: string | null = null;
   const now = () => engine.context?.currentTime ?? 0;
   const feedback = (text: string) => {
     message = text;
@@ -36,6 +44,19 @@ export function createStudio(notify: () => void) {
   };
   const syncMixer = () =>
     mixer.ensure(arrangement.snapshot().tracks.map((t) => t.id));
+  /** 把当前所有琴键轨的已确认音色注册进引擎（播放/演奏只认注册表）。 */
+  const syncTimbres = () => {
+    for (const t of arrangement.snapshot().tracks)
+      if (t.instrument === "keys" && t.timbre)
+        engine.registerTimbre(t.id, t.timbre);
+  };
+  const discardTimbreDraft = () => {
+    if (previewTrackId) {
+      engine.stopPreview(previewTrackId);
+      previewTrackId = null;
+    }
+    timbreDraft = null;
+  };
   const cancelVoices = () => {
     engine.cancel();
     active.clear();
@@ -45,6 +66,7 @@ export function createStudio(notify: () => void) {
     transport.stop();
     recorder.cancel();
     cancelVoices();
+    discardTimbreDraft();
     notify();
   };
   const pause = () => {
@@ -52,6 +74,7 @@ export function createStudio(notify: () => void) {
     transport.pause(now());
     recorder.cancel();
     cancelVoices();
+    discardTimbreDraft();
     feedback("播放已暂停；未完成录音已取消，原片段保留。");
   };
   const unlock = async () => {
@@ -60,6 +83,7 @@ export function createStudio(notify: () => void) {
     mixer.attach(context);
     syncMixer();
     engine.route(mixer.channel);
+    syncTimbres();
     return true;
   };
   const play = async () => {
@@ -138,6 +162,8 @@ export function createStudio(notify: () => void) {
     const valid = arrangement.restore(session);
     transport.configure(valid.bpm, valid.beats);
     mixer.restore(valid.channels, valid.master);
+    discardTimbreDraft();
+    syncTimbres();
     notify();
   };
   const timer = window.setInterval(() => {
@@ -171,6 +197,8 @@ export function createStudio(notify: () => void) {
         mixer: mixer.snapshot(),
         active: new Set(active),
         message,
+        timbreDraft,
+        previewing: previewTrackId !== null,
       };
     },
     play,
@@ -186,14 +214,18 @@ export function createStudio(notify: () => void) {
     },
     add(kind: Instrument) {
       guard(() => {
-        arrangement.add(kind);
+        const id = arrangement.add(kind);
         syncMixer();
+        const t = arrangement.timbre(id);
+        if (t) engine.registerTimbre(id, t);
+        discardTimbreDraft();
       });
     },
     select(id: string) {
       if (recorder.snapshot().status !== "idle") return;
       engine.releaseHeld();
       active.clear();
+      discardTimbreDraft();
       arrangement.select(id);
       notify();
     },
@@ -203,6 +235,7 @@ export function createStudio(notify: () => void) {
         if (selected) {
           stop();
           arrangement.remove(selected.id);
+          engine.removeTimbre(selected.id);
           syncMixer();
         }
       });
@@ -256,6 +289,58 @@ export function createStudio(notify: () => void) {
       mixer.master(n);
       notify();
     },
+    /** 拖动/选择产生的草稿更新；首次修改时自动开启音色试听。 */
+    editTimbre(next: Timbre) {
+      const target = arrangement.selected();
+      if (!target || target.instrument !== "keys") return;
+      const confirmed = target.timbre;
+      if (!confirmed) return;
+      timbreDraft = clampTimbre(next);
+      if (engine.context) {
+        if (previewTrackId !== target.id) {
+          if (previewTrackId) engine.stopPreview(previewTrackId);
+          engine.previewTimbre(target.id, timbreDraft);
+          previewTrackId = target.id;
+        } else {
+          engine.patchPreview(target.id, timbreDraft);
+        }
+      }
+      notify();
+    },
+    /** 显式试听：用当前草稿（无草稿则用已确认音色）重启临时试听。 */
+    async previewTimbre() {
+      const target = arrangement.selected();
+      if (!target || target.instrument !== "keys" || !target.timbre) return;
+      try {
+        if (!(await unlock())) return;
+        const t = timbreDraft ?? target.timbre;
+        engine.previewTimbre(target.id, t);
+        previewTrackId = target.id;
+        notify();
+      } catch {
+        feedback("试听启动失败，请再次点击");
+      }
+    },
+    /** 确认音色：写入轨道并平滑作用于该轨正在响的声音；草稿与试听清理。 */
+    commitTimbre() {
+      const target = arrangement.selected();
+      if (!target || target.instrument !== "keys" || !target.timbre) return;
+      const next = clampTimbre(timbreDraft ?? target.timbre);
+      arrangement.updateTimbre(target.id, next);
+      engine.registerTimbre(target.id, next);
+      discardTimbreDraft();
+      feedback(
+        timbreEqual(next, target.timbre)
+          ? "音色已确认，参数与原设置一致。"
+          : "音色已确认并保存到该轨道，循环与演奏都会使用它。",
+      );
+    },
+    /** 取消试听：返回原设置，停止并清理全部临时试听节点。 */
+    cancelTimbre() {
+      discardTimbreDraft();
+      feedback("已放弃音色修改，恢复该轨道原来的设置。");
+      notify();
+    },
     demo() {
       guard(() => {
         install(demoSession());
@@ -283,6 +368,8 @@ export function createStudio(notify: () => void) {
     },
     load() {
       guard(() => {
+        // loadSession 先完整校验：损坏时直接抛错，install 不会执行，
+        // 当前作品与半套新音色都不会被写入。
         const session = loadSession();
         install(session);
         message = "本地作品已恢复";

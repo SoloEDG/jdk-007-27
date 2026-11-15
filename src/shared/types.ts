@@ -1,3 +1,4 @@
+import type { Timbre } from "./timbre";
 export type Instrument = "drums" | "keys";
 export type Note = {
   id: string;
@@ -12,6 +13,8 @@ export type Track = {
   instrument: Instrument;
   color: string;
   notes: Note[];
+  /** 琴键轨的音色；鼓组轨为 null。录音只存音符，音色随轨道引用。 */
+  timbre: Timbre | null;
 };
 export type Channel = { volume: number; muted: boolean };
 export type Session = {

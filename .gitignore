@@ -1,6 +1,9 @@
 node_modules
 dist
 
+# 音色验证脚本的临时转译产物
+scripts/.tmp-build
+
 # PINRU annotation baseline
 node_modules/
 .DS_Store
